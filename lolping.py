@@ -160,11 +160,12 @@ def post_message(message, server, auth_hash = None):
     Keyword Arguments:
         auth_hash {str} -- sha512 hashed auth key (default: {None})
     """
-    
-
     if server:
         try:
-            r = requests.post(server, json=json.dumps(message))
+            data = {'message': message}
+            if auth_hash:
+                data['auth_hash'] = auth_hash
+            r = requests.post(server, json=json.dumps(data))
             if r.status_code == 200:
                 lolping_logger.info(f"{r.status_code} {r.text}")
             else:
@@ -208,7 +209,7 @@ def main():
     server = args.server
     auth = args.auth
     
-    remote_host = args.address
+    target_host = args.address
     local_host = socket.gethostname()
     local_ip = socket.getaddrinfo(local_host, 0, socket.AF_INET)[0][4][0]
     local_public_ip = lookup_public_ip()
@@ -270,8 +271,9 @@ def main():
                     post_message(dict(
                                     local_host=local_host,
                                     local_ip=local_ip,
-                                    remote_host=remote_host,
-                                    remote_ip=rep.Address,
+                                    local_public_ip=local_public_ip,
+                                    target_host=target_host,
+                                    target_ip=rep.Address,
                                     requests=reqs,
                                     responses=resps,
                                     rtt_list=rtt_list,
