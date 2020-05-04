@@ -10,9 +10,9 @@ from datetime import datetime
 from statistics import stdev
 
 import requests
+import winping
 from passlib.hash import sha512_crypt
-from winping import *
-from winping.errors import *
+from winping.errors import RequestTimedOut
 
 PUBLIC_IP_LOOKUP=os.getenv("PUBLIC_IP_LOOKUP", "https://ifconfig.co/json")
 
@@ -128,67 +128,170 @@ def average(lst):
     return round(sum(lst) / len(lst), 3)
 
 
-def timestamp():
-    """Return current UNIX timestamp.
+class LolPing:
+    def __init__(self, args):
+        self.data = os.urandom(args.size)
+        self.interval = args.interval
+        self.post_interval = args.post_interval
+        self.timeout = args.timeout
 
-    Returns:
-        int -- current UNIX timestamp
-    """
-    return int(datetime.timestamp(datetime.now()))
-
-
-def make_hash(salt, auth):
-    """Make sha512 hash value with salt and auth.
-
-    Arguments:
-        salt {str} -- string for salt
-        auth {str} -- string for auth
-
-    Returns:
-        str -- sha512 hash value
-    """
-    return sha512_crypt.hash(salt+auth, rounds=5000)
-
-
-def post_message(message, server, auth_hash = None):
-    """Post 'message to remote 'server' with 'auth_hash'(optional).
-
-    Arguments:
-        message {dict} -- message to post
-        server {str} -- remote server url
-
-    Keyword Arguments:
-        auth_hash {str} -- sha512 hashed auth key (default: {None})
-    """
-    if server:
+        self.target_host = args.address
         try:
-            data = {'message': message}
-            if auth_hash:
-                data['auth_hash'] = auth_hash
-            r = requests.post(server, json=json.dumps(data))
-            if r.status_code == 200:
-                lolping_logger.info(f"{r.status_code} {r.text}")
+            ai_list = socket.getaddrinfo(args.address, 0, socket.AF_INET)
+            self.target_ip = ai_list[0][4][0]
+        except (socket.gaierror, ValueError):
+            lolping_logger.error(f"Ping request could not find host '{args.address}'. "
+                "Please check the name and try again.")
+            sys.exit(3)
+                
+        self.local_host = socket.gethostname()
+        self.local_ip = socket.getaddrinfo(self.local_host, 0, socket.AF_INET)[0][4][0]
+        self.local_public_ip = self._lookup_public_ip()
+        
+        self.server = args.server
+        if args.auth:
+            self.auth_hash = self._make_hash(self.local_ip+self.local_public_ip, self.auth)
+        else:
+            self.auth_hash = None
+
+        self._ping_count = 0
+        self._requests = 0
+        self._responses = 0
+        self._loss = 0
+        self._rtt_list = []
+        
+        self._total_requests = 0
+        self._total_responses = 0
+        self._total_loss = 0
+        self._total_rtt_list = []
+        
+        self.content = dict(
+            server = self.server,
+            auth_hash = self.auth_hash,
+            local_host = self.local_host,
+            local_ip = self.local_ip,
+            local_public_ip = self.local_public_ip,
+            target_host = self.target_host,
+            target_ip = self.target_ip
+        )
+
+        lolping_logger.info(f"Report server url: {self.server}")
+        lolping_logger.info(f"Auth enabled: {self.auth_hash is not None}")
+        lolping_logger.info(f"Pinging {self.target_host} [{self.target_ip}] with {len(self.data)} bytes of data:")
+
+    def __repr__(self):
+        return f"{type(self).__name__}({self.content})"
+
+    def _timestamp(self):
+        """Return current UNIX timestamp.
+
+        Returns:
+            int -- current UNIX timestamp
+        """
+        return int(datetime.timestamp(datetime.now()))
+
+    def _make_hash(self, salt, auth):
+        """Make sha512 hash value with salt and auth.
+
+        Arguments:
+            salt {str} -- string for salt
+            auth {str} -- string for auth
+
+        Returns:
+            str -- sha512 hash value
+        """
+        return sha512_crypt.hash(salt+auth, rounds=5000)
+
+    def _lookup_public_ip(self):
+        """Lookup public IP of local host.
+
+        Returns:
+            str -- public ip or 'not found'
+        """
+        try:
+            return requests.get(PUBLIC_IP_LOOKUP).json()['ip']
+        except (json.JSONDecodeError, KeyError):
+            return 'not found'
+
+    def ping(self, handle):
+        while True:
+            try:
+                self._ping_count += 1
+                timestamp_ = self._timestamp()
+                res = winping.ping(handle, self.target_ip, timeout=self.timeout, data=self.data)
+            except RequestTimedOut:
+                self._requests += 1
+                self._total_requests += 1
+                self._loss += 1
+                self._total_loss += 1
+            except OSError as e:
+                lolping_logger.error(e)
             else:
-                lolping_logger.error(f"{r.status_code} {r.text}")
-        except json.JSONDecodeError:
-            lolping_logger.error(f"invalid message format: {message}")
-        except requests.ConnectionError:
-            lolping_logger.error(f"connection failed: {server}")
-    else:
-        lolping_logger.debug(f"message: {message} server: {server} auth_hash: {auth_hash}")
+                self._requests += 1
+                self._total_requests += 1
+                for rep in res:
+                    if rep.Status == 0:
+                        rtt = rep.RoundTripTime
+                        self._rtt_list.append((timestamp_, rtt))
+                        self._total_rtt_list.append((timestamp_, rtt))
+                        lolping_logger.debug(f"Reply from {rep.Address}: bytes={len(rep.Data)} time={rtt}ms TTL={rep.Options.Ttl}")
+                        if rep.Data != self.data:
+                            lolping_logger.error("Corrupted packet!")
+                        self._responses += 1
+                        self._total_responses += 1
+                    else:
+                        self._loss += 1
+                        self._total_loss += 1
+            if self._ping_count % self.post_interval == 0:
+                (self._requests, self._responses, self_loss, self._rtt_list) = self._post_rtt_list(self._requests, self._responses, self._loss, self._rtt_list)
+            time.sleep(self.interval)
 
+    def _post_rtt_list(self, req_count, resp_count, loss_count, rtt_list):
+        data = dict(
+            requests = req_count,
+            responses = resp_count,
+            loss = loss_count,
+            rtt_list = rtt_list
+        )
+        if self.server:
+            try:
+                url = f"{self.server}/local_host/{self.local_host}/local_ip/{self.local_ip}/local_public_ip/{self.local_public_ip}"
 
-def lookup_public_ip():
-    """Lookup public IP of local host.
+                if self.auth_hash:
+                    params = dict(auth_hash = self.auth_hash)
+                else:
+                    params = None
+                r = requests.post(url, params=params, json=data)
+                if r.status_code == 200:
+                    lolping_logger.info(f"{r.status_code} {r.text}")
+                else:
+                    lolping_logger.error(f"{r.status_code} {r.text}")
+            except json.JSONDecodeError:
+                lolping_logger.error(f"invalid rtt_list format: {data}")
+            except requests.ConnectionError:
+                lolping_logger.error(f"connection failed: {self.server}")
+            finally:
+                return (0, 0, 0, [])
+        else:
+            lolping_logger.debug(f"data: {data} server: {self.server} auth_hash: {self.auth_hash}")
+            return (req_count, resp_count, loss_count, rtt_list)
 
-    Returns:
-        str -- public ip or 'not found'
-    """
-    try:
-        return requests.get(PUBLIC_IP_LOOKUP).json()['ip']
-    except (json.JSONDecodeError, KeyError):
-        return 'not found'
+    def post_rtt(self, rtt):
+        pass
 
+    def statistics(self):
+        return dict(
+            target_host = self.target_host,
+            target_ip = self.target_ip,
+            total_requests = self._total_requests,
+            total_responses = self._total_responses,
+            total_loss = self._total_loss,
+            loss_percentage = 100*self._total_loss/self._total_requests,
+            max_rtt = max([rtt[1] for rtt in self._total_rtt_list]),
+            min_rtt = min([rtt[1] for rtt in self._total_rtt_list]),
+            average_rtt = int(average([rtt[1] for rtt in self._total_rtt_list])) if len(self._total_rtt_list) >= 1 else 0,
+            stdev_rtt = int(stdev([rtt[1] for rtt in self._total_rtt_list])) if len(self._total_rtt_list) >= 2 else 0
+        )
 
 def main():
     args = parse_args()
@@ -196,104 +299,20 @@ def main():
         for handler in lolping_logger.handlers:
             if handler.name == 'console':
                 handler.setLevel(logging.DEBUG)
-    try:
-        ai_list = socket.getaddrinfo(args.address, 0, socket.AF_INET)
-    except (socket.gaierror, ValueError):
-        lolping_logger.error(f"Ping request could not find host '{args.address}'. "
-            "Please check the name and try again.")
-        sys.exit(3)
-    ip = ai_list[0][4][0]
-    data = os.urandom(args.size)
-    interval = args.interval
-    post_interval = args.post_interval
-    server = args.server
-    auth = args.auth
-    
-    target_host = args.address
-    local_host = socket.gethostname()
-    local_ip = socket.getaddrinfo(local_host, 0, socket.AF_INET)[0][4][0]
-    local_public_ip = lookup_public_ip()
-    if auth:
-        auth_hash = make_hash(local_ip+local_public_ip, auth)
-    else:
-        auth_hash = None
 
-    lolping_logger.info(f"Report server url: {server}")
-    lolping_logger.info(f"Pinging {args.address} [{ip}] with {len(data)} bytes of data:")
-
-    count = 0
-    reqs = 0
-    resps = 0
-    lost = 0
-    rtt_list = list()
-    
-    reqs_total = 0
-    resps_total = 0
-    lost_total = 0
-    rtt_list_total = list()
-    min_rtt = float("+inf")
-    max_rtt = float("-inf")
+    lolping = LolPing(args)
 
     try:
-        with IcmpHandle() as handle:
-            while True:
-                count += 1
-                try:
-                    timestamp_ = timestamp()
-                    res = ping(handle, ip, timeout=args.timeout, data=data)
-                except RequestTimedOut:
-                    reqs += 1
-                    lost += 1
-                    reqs_total += 1
-                    lost_total += 1
-                except OSError as e:
-                    lolping_logger.error(e)
-                else:
-                    reqs += 1
-                    reqs_total += 1
-                    for rep in res:
-                        if rep.Status == 0:
-                            rtt = rep.RoundTripTime
-                            max_rtt = max(max_rtt, rtt)
-                            min_rtt = min(min_rtt, rtt)
-                            rtt_list.append((timestamp_, rtt))
-                            rtt_list_total.append((timestamp_, rtt))
-                            lolping_logger.debug(f"Reply from {rep.Address}: bytes={len(rep.Data)} time={rtt}ms TTL={rep.Options.Ttl}")
-                            if rep.Data != data:
-                                lolping_logger.error("Corrupted packet!")
-                            resps += 1
-                            resps_total += 1
-                        else:
-                            lost += 1
-                            lost_total += 1
-                            
-                if count % post_interval == 0:
-                    post_message(dict(
-                                    local_host=local_host,
-                                    local_ip=local_ip,
-                                    local_public_ip=local_public_ip,
-                                    target_host=target_host,
-                                    target_ip=rep.Address,
-                                    requests=reqs,
-                                    responses=resps,
-                                    rtt_list=rtt_list,
-                                    loss=lost), server, auth_hash)
-                    reqs = 0
-                    resps = 0
-                    lost = 0
-                    rtt_list = list()
-                time.sleep(interval)
+        with winping.IcmpHandle() as handle:
+            lolping.ping(handle)
     except KeyboardInterrupt:
         pass
 
-    average_rtt = int(average([rtt[1] for rtt in rtt_list_total])) if len(rtt_list_total) > 0 else 0
-    stdev_rtt = int(stdev([rtt[1] for rtt in rtt_list_total])) if len(rtt_list_total) > 1 else 0
-    if reqs_total:
-        lolping_logger.info(f"Ping statistics for {ip}:")
-        lolping_logger.info(f"Packets: Sent = {reqs_total}, Received = {resps_total}, Lost = {lost_total} ({(100*lost/reqs_total):.2f}% loss),")
-    if resps_total:
-        lolping_logger.info("Approximate round trip times in milli-seconds:")
-        lolping_logger.info(f"Minimum = {min_rtt}ms, Maximum = {max_rtt}ms, Average = {average_rtt}ms Stdev = {stdev_rtt}ms")
+    stats = lolping.statistics()
+    lolping_logger.info(f"Ping statistics for {stats['target_host']} ({stats['target_ip']}):")
+    lolping_logger.info(f"Packets: Sent = {stats['total_requests']}, Received = {stats['total_responses']}, Lost = {stats['total_loss']} ({stats['loss_percentage']:.2f}% loss),")
+    lolping_logger.info("Approximate round trip times in milli-seconds:")
+    lolping_logger.info(f"Minimum = {stats['min_rtt']}ms, Maximum = {stats['max_rtt']}ms, Average = {stats['average_rtt']}ms Stdev = {stats['stdev_rtt']}ms")
 
 if __name__ == '__main__':
     try:
