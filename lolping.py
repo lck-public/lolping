@@ -258,18 +258,22 @@ class LolPing:
             return (0, 0, 0, [])
 
     def stats(self):
-        return dict(
+        stat_data = dict(
             target_host = self.target_host,
             target_ip = self.target_ip,
             total_requests = self._total_requests,
             total_responses = self._total_responses,
             total_loss = self._total_loss,
-            loss_percentage = 100*self._total_loss/self._total_requests,
-            max_rtt = max([rtt['rtt'] for rtt in self._total_rtt_list]),
-            min_rtt = min([rtt['rtt'] for rtt in self._total_rtt_list]),
-            average_rtt = int(average([rtt['rtt'] for rtt in self._total_rtt_list])) if len(self._total_rtt_list) >= 1 else 0,
-            stdev_rtt = int(stdev([rtt['rtt'] for rtt in self._total_rtt_list])) if len(self._total_rtt_list) >= 2 else 0
+            loss_percentage = 100*self._total_loss/self._total_requests
         )
+        if len(self._total_rtt_list) > 0:
+            stat_data.update(
+                max_rtt = max([rtt['rtt'] for rtt in self._total_rtt_list]),
+                min_rtt = min([rtt['rtt'] for rtt in self._total_rtt_list]),
+                average_rtt = int(average([rtt['rtt'] for rtt in self._total_rtt_list])) if len(self._total_rtt_list) >= 1 else 0,
+                stdev_rtt = int(stdev([rtt['rtt'] for rtt in self._total_rtt_list])) if len(self._total_rtt_list) >= 2 else 0
+            )
+        return stat_data
 
 def main():
     args = parse_args()
@@ -291,9 +295,12 @@ def main():
     lolping_logger.info(f"Packets: Sent = {stats['total_requests']}, "
                         f"Received = {stats['total_responses']}, "
                         f"Lost = {stats['total_loss']} ({stats['loss_percentage']:.2f}% loss),")
-    lolping_logger.info("Approximate round trip times in milli-seconds:")
-    lolping_logger.info(f"Minimum = {stats['min_rtt']}ms, Maximum = {stats['max_rtt']}ms, "
-                        f"Average = {stats['average_rtt']}ms Stdev = {stats['stdev_rtt']}ms")
+    try:
+        lolping_logger.info("Approximate round trip times in milli-seconds:")
+        lolping_logger.info(f"Minimum = {stats['min_rtt']}ms, Maximum = {stats['max_rtt']}ms, "
+                            f"Average = {stats['average_rtt']}ms Stdev = {stats['stdev_rtt']}ms")
+    except KeyError:
+        pass
 
 if __name__ == '__main__':
     try:
