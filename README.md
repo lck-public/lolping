@@ -27,7 +27,7 @@ PS C:\lolping> pip install -r requirements.txt
 ```powershell
 PS C:\lolping> python .\lolping.py -h
 usage: lolping.py [-h] [-d] [-w TIMEOUT] [-l SIZE] [-i INTERVAL]
-                  [-p POST_INTERVAL] [-s SERVER] [-a AUTH]
+                  [-p POST_INTERVAL] [-u URL] [-a AUTH]
                   address
 
 Ping implementation which utilizes Windows ICMP API
@@ -44,9 +44,9 @@ optional arguments:
   -l SIZE               number of data bytes to be sent (default: 32)
   -i INTERVAL           specifies interval between ping packets (default: 1)
   -p POST_INTERVAL      specifies interval between data posting (default: 10)
-  -s SERVER, --server SERVER
-                        specifies server url to post result (default: None)
-  -a AUTH, --auth AUTH  specifies auth token for message post (default: None)
+  -u URL, --url URL     specifies url for result posting (default: None)
+  -a AUTH, --auth AUTH  specifies auth token for message posting (default:
+                        None)
 ```
 
 * `lolping.py` posts a message every 10 ICMP requests by default. This can be changed with `-p` option.
@@ -67,6 +67,7 @@ PS C:\lolping> python .\lolping.py -d 8.8.8.8
 [2020-05-02 22:13:22,822] lolping.py:293 [INFO] Approximate round trip times in milli-seconds:
 [2020-05-02 22:13:22,840] lolping.py:294 [INFO] Minimum = 38ms, Maximum = 41ms, Average = 39ms Stdev = 1ms
 ```
+
 Press `CTRL-C` to stop pinging.
 
 ## Logging
@@ -78,16 +79,11 @@ Press `CTRL-C` to stop pinging.
 ### Format
 
 ```json
-"message": {
-    "local_host": <client PC's hostname>,
-    "local_ip": <client PC's local IP>,
-    "local_public_ip": <client PC's public exposed IP>,
-    "target_host": <target host>,
-    "target_ip": <target host ip>,
+{
     "requests": <number of ICMP request packets sent>,
     "responses": <number of ICMP response packets received>,
-    "rtt_list": <RoundTripTime for each ICMP request/response> [(<UNIX timestamp>, <rtt>), ...],
-    "loss": <number of unreceived ICMP response packets>
+    "loss": <number of unreceived ICMP response packets>,
+    "rtt_list": <RoundTripTime for each ICMP request/response> [{'timestamp': (<UNIX timestamp>, 'rtt': <rtt>}, ...]
 }
 ```
 
@@ -95,21 +91,25 @@ Press `CTRL-C` to stop pinging.
 
 `lolping.py` posts messages with POST method.
 
-```
-POST /api/lolping
+```http
+POST /api/lolping/rtts?client_hostname=:client_hostname&client_local_ip=:client_local_ip&client_public_ip=:client_public_ip&auth_hash=:auth_hash
 HOST: https://api.server.com HTTP/1.1
 Accept: */*
 Content-type: application/json
 {
-    "message": <message>,
-    "auth_hash": <auth_hash>
+    "requests": <int>,
+    "responses": <int>,
+    "loss": <int>,
+    "rtt_list": [{'timestamp': (<UNIX timestamp>, 'rtt': <int>}, ...]
 }
 ```
 
 ## Auth_hash
 
-`auth_hash` is created by sha512 hashing with a combination of `local_ip`, `local_public_ip` and `AUTH` given with `-a` option.
+`auth_hash` is base64 encoded sha512 hash value. (-a AUTH)
 
 ```python
-auth_hash = sha512_crypt.hash(local_ip+local_public_ip+AUTH, round=5000)
+from base64 import b64encode
+from passlib.hash import sha512_crypt
+auth_hash = b64encode(sha512_crypt.hash(AUTH, rounds=5000).encode())
 ```
