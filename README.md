@@ -1,10 +1,10 @@
 # lolping
- 
+
  monitor latency to LoL server with ICMP and report to remote server
 
 ## Requirements
 
-* Windows XP / Windows Server 2003 and newer 
+* Windows XP / Windows Server 2003 and newer
 * python >=3.5.3
 * pip
 
@@ -30,7 +30,7 @@ usage: lolping.py [-h] [-d] [-w TIMEOUT] [-l SIZE] [-i INTERVAL]
                   [-p POST_INTERVAL] [-u URL] [-a AUTH]
                   address
 
-Ping implementation which utilizes Windows ICMP API
+Latency Monitoring with ICMP and Remote Reporting Tool
 
 positional arguments:
   address               specifies the host name or IP address of the
@@ -80,27 +80,33 @@ Press `CTRL-C` to stop pinging.
 
 ```json
 {
-    "requests": <number of ICMP request packets sent>,
-    "responses": <number of ICMP response packets received>,
-    "loss": <number of unreceived ICMP response packets>,
-    "rtt_list": <RoundTripTime for each ICMP request/response> [{'timestamp': (<UNIX timestamp>, 'rtt': <rtt>}, ...]
+    "requests": 2,
+    "responses": 2,
+    "loss": 0,
+    "rtt_list": [{"timestamp": 1588732000, "rtt": 32}, {"timestamp": 1588732001, "rtt": 31}]
 }
 ```
+
+* requests : number of ICMP request packets sent
+* responses : number of ICMP response packets received
+* loss : number of unreceived ICMP response packets
+* rtt_list : list of RoundTripTime for each ICMP request/response
 
 ### Posting
 
 `lolping.py` posts messages with POST method.
 
 ```http
-POST /api/lolping/rtts?client_hostname=:client_hostname&client_local_ip=:client_local_ip&client_public_ip=:client_public_ip&auth_hash=:auth_hash
+POST /api/lolping/rtts?client_hostname=:client_hostname&client_local_ip=:client_local_ip&client_public_ip=:client_public_ip
 HOST: https://api.server.com HTTP/1.1
 Accept: */*
+X-Auth-Hash: JDYkL1FTam50L2o3LlgzVHlKSiRlck94ejZRM1VjQWlZcGxQUVhEVVQyUVlieVBQczVrV28zZVZQakpVY1lZVElGVUZoa0l5LjhzOTZuUjJ4QlBpeDBjdk8udXBqWGl4bHppUGNOQi9lMQ==
 Content-type: application/json
 {
-    "requests": <int>,
-    "responses": <int>,
-    "loss": <int>,
-    "rtt_list": [{'timestamp': (<UNIX timestamp>, 'rtt': <int>}, ...]
+    "requests": 2,
+    "responses": 2,
+    "loss": 0,
+    "rtt_list": [{"timestamp": 1588732000, "rtt": 32}, {"timestamp": 1588732001, "rtt": 31}]
 }
 ```
 

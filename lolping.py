@@ -72,7 +72,7 @@ def parse_args():
         return value
 
     parser = argparse.ArgumentParser(
-        description="Ping implementation which utilizes Windows ICMP API",
+        description="Latency Monitoring with ICMP and Remote Reporting Tool",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument("address",
                         help="specifies the host name or IP address of the "
@@ -186,6 +186,40 @@ class LolPing:
             lolping_logger.warning("public ip lookup failed.")
             return 'not found'
 
+    def _post_rtt_list(self, req_count, resp_count, loss_count, rtt_list):
+        data = dict(
+            requests = req_count,
+            responses = resp_count,
+            loss = loss_count,
+            rtt_list = rtt_list,
+        )
+        if self.url:
+            try:
+                headers = {'X-Auth-Hash': self.auth_hash or ''}
+                params = dict(
+                    client_hostname = self.client_hostname,
+                    client_local_ip = self.client_local_ip,
+                    client_public_ip = self.client_public_ip,
+                )
+                r = requests.post(self.url, headers=headers, params=params, json=data, timeout=2)
+                lolping_logger.debug(f"request url: {r.url}")
+                if r.status_code == 200:
+                    lolping_logger.info(f"{r.status_code} {r.text}")
+                else:
+                    lolping_logger.error(f"{r.status_code} {r.text}")
+            except json.JSONDecodeError:
+                lolping_logger.error(f"invalid rtt_list format: {data}")
+            except requests.ConnectionError:
+                lolping_logger.error(f"connection failed: {self.url}")
+            except requests.Timeout:
+                lolping_logger.error(f"connection timeout: {self.url}")
+            finally:
+                return (0, 0, 0, [])
+        else:
+            lolping_logger.debug(json.dumps(data))
+            return (0, 0, 0, [])
+
+
     def ping(self, handle):
         ping_count = 0
         req_count = 0
@@ -223,39 +257,6 @@ class LolPing:
             if ping_count % self.post_interval == 0:
                 (req_count, resp_count, loss_count, rtt_list) = self._post_rtt_list(req_count, resp_count, loss_count, rtt_list)
             time.sleep(self.interval)
-
-    def _post_rtt_list(self, req_count, resp_count, loss_count, rtt_list):
-        data = dict(
-            requests = req_count,
-            responses = resp_count,
-            loss = loss_count,
-            rtt_list = rtt_list
-        )
-        if self.url:
-            try:
-                params = dict(
-                    client_hostname = self.client_hostname,
-                    client_local_ip = self.client_local_ip,
-                    client_public_ip = self.client_public_ip,
-                    auth_hash = self.auth_hash or ''
-                )
-                r = requests.post(self.url, params=params, json=data, timeout=2)
-                lolping_logger.debug(f"request url: {r.url}")
-                if r.status_code == 200:
-                    lolping_logger.info(f"{r.status_code} {r.text}")
-                else:
-                    lolping_logger.error(f"{r.status_code} {r.text}")
-            except json.JSONDecodeError:
-                lolping_logger.error(f"invalid rtt_list format: {data}")
-            except requests.ConnectionError:
-                lolping_logger.error(f"connection failed: {self.url}")
-            except requests.Timeout:
-                lolping_logger.error(f"connection timeout: {self.url}")
-            finally:
-                return (0, 0, 0, [])
-        else:
-            lolping_logger.debug(json.dumps(data))
-            return (0, 0, 0, [])
 
     def stats(self):
         stat_data = dict(
