@@ -49,6 +49,7 @@ logging.config.dictConfig({
 })
 lolping_logger = logging.getLogger('lolping')
 
+
 def parse_args():
     def check_positive_int(value):
         value = int(value)
@@ -216,7 +217,7 @@ class LolPing:
             finally:
                 return (0, 0, 0, [])
         else:
-            lolping_logger.debug(json.dumps(data))
+            # lolping_logger.debug(json.dumps(data))
             return (0, 0, 0, [])
 
 
